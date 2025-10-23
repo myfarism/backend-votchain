@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   String    @id @default(uuid()) @db.Uuid
+  email                String    @unique
+  username             String
+  nim                  String    @unique
+  prodi                String
+  password             String
+  walletAddress        String    @unique @map("wallet_address")
+  encryptedPrivateKey  String    @map("encrypted_private_key") @db.Text
+  isVerified           Boolean   @default(false) @map("is_verified")
+  registeredOnChain    Boolean   @default(false) @map("registered_on_chain")
+  registrationHash     String?   @map("registration_hash")
+  resetPasswordToken   String?   @map("reset_password_token")
+  resetPasswordExpiry  DateTime? @map("reset_password_expiry")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  
+  otps                 OTP[]
+  
+  @@index([email])
+  @@index([nim])
+  @@index([walletAddress])
+  @@map("users")
+}
+
+model Admin {
+  id              String   @id @default(uuid()) @db.Uuid
+  email           String   @unique
+  username        String
+  password        String
+  walletAddress   String   @unique @map("wallet_address")
+  role            String   @default("admin")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  @@index([email])
+  @@map("admins")
+}
+
+model OTP {
+  id         String   @id @default(uuid()) @db.Uuid
+  email      String
+  otp        String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  
+  user       User?    @relation(fields: [email], references: [email], onDelete: Cascade)
+  
+  @@index([email])
+  @@index([expiresAt])
+  @@map("otps")
+}
+
+model Candidate {
+  id              String   @id @default(uuid()) @db.Uuid
+  candidateId     Int      @unique @map("candidate_id")
+  name            String
+  description     String?  @db.Text
+  imageUrl        String?  @map("image_url")
+  prodi           String
+  voteCount       Int      @default(0) @map("vote_count")
+  isActive        Boolean  @default(true) @map("is_active")
+  dataHash        String?  @map("data_hash")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  @@index([prodi])
+  @@index([candidateId])
+  @@map("candidates")
+}
+
+model VotingSession {
+  id              String   @id @default(uuid()) @db.Uuid
+  sessionName     String   @map("session_name")
+  description     String?  @db.Text
+  startTime       DateTime @map("start_time")
+  endTime         DateTime @map("end_time")
+  isActive        Boolean  @default(false) @map("is_active")
+  sessionHash     String?  @map("session_hash")
+  createdBy       String   @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  
+  @@index([isActive])
+  @@map("voting_sessions")
+}
+
+model VoteRecord {
+  id              String   @id @default(uuid()) @db.Uuid
+  voterAddress    String   @map("voter_address")
+  candidateId     Int      @map("candidate_id")
+  voterProdi      String   @map("voter_prodi")
+  messageHash     String   @map("message_hash")
+  signature       String   @db.Text
+  verified        Boolean  @default(false)
+  transactionHash String?  @unique @map("transaction_hash")
+  blockNumber     Int?     @map("block_number")
+  timestamp       DateTime @default(now())
+  
+  @@index([voterAddress])
+  @@index([candidateId])
+  @@index([messageHash])
+  @@map("vote_records")
+}
+
+model AuditLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  action          String
+  performedBy     String   @map("performed_by")
+  performedByRole String   @map("performed_by_role")
+  targetId        String?  @map("target_id")
+  targetType      String?  @map("target_type")
+  details         String?  @db.Text
+  ipAddress       String?  @map("ip_address")
+  userAgent       String?  @map("user_agent")
+  dataHash        String?  @map("data_hash")
+  timestamp       DateTime @default(now())
+  
+  @@index([performedBy])
+  @@index([action])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
