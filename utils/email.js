@@ -120,6 +120,59 @@ class EmailService {
     }
   }
 
+  // Send Password Reset OTP email
+  static async sendPasswordResetOTP(email, otp) {
+    const service = new EmailService();
+    
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: 'Reset Password - Kode OTP Verifikasi',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #dc2626;">Reset Password - Sistem Voting Blockchain</h2>
+          <p>Kami menerima permintaan untuk mereset password akun Anda.</p>
+          <p>Gunakan kode OTP berikut untuk melanjutkan proses reset password:</p>
+          <div style="background-color: #fef2f2; padding: 20px; border-radius: 8px; text-align: center; border: 2px solid #fca5a5;">
+            <h1 style="color: #991b1b; font-size: 32px; margin: 0; letter-spacing: 4px;">${otp}</h1>
+            <p style="color: #7f1d1d; margin: 10px 0 0 0; font-weight: 600;">Kode OTP Reset Password</p>
+          </div>
+          <div style="background-color: #fef3c7; padding: 15px; border-radius: 8px; border-left: 4px solid #f59e0b; margin: 20px 0;">
+            <p style="margin: 0; color: #92400e;">
+              <strong>⚠️ PENTING:</strong> Kode ini akan kedaluwarsa dalam <strong>5 menit</strong>.
+            </p>
+          </div>
+          <div style="background-color: #fee2e2; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0; color: #991b1b; font-size: 14px;">
+              <strong>🔐 Tips Keamanan:</strong>
+            </p>
+            <ul style="margin: 10px 0 0 0; padding-left: 20px; color: #7f1d1d;">
+              <li>Jangan bagikan kode ini kepada siapapun, termasuk admin</li>
+              <li>Jika Anda tidak meminta reset password, abaikan email ini</li>
+              <li>Pastikan Anda mengubah password dengan yang kuat dan unik</li>
+            </ul>
+          </div>
+          <p style="color: #6b7280; font-size: 13px; margin-top: 20px;">
+            Jika Anda tidak merasa melakukan permintaan reset password, segera amankan akun Anda atau hubungi tim support kami.
+          </p>
+          <hr style="border: 1px solid #e5e7eb; margin: 20px 0;">
+          <p style="color: #9ca3af; font-size: 11px; text-align: center;">
+            Email otomatis dari Sistem Voting Blockchain dengan keamanan ECDSA & AES-256
+          </p>
+        </div>
+      `
+    };
+
+    try {
+      await service.transporter.sendMail(mailOptions);
+      console.log(`✅ Password reset OTP email sent to ${email}`);
+    } catch (error) {
+      console.error('❌ Password reset OTP email error:', error);
+      throw error;
+    }
+  }
+
+
   // Test email connection
   static async testConnection() {
     const service = new EmailService();

@@ -11,7 +11,7 @@ router.post('/resend-otp', AuthController.resendOTP);
 router.post('/login', AuthController.loginUser);
 router.post('/login/admin', AuthController.loginAdmin);
 router.post('/forgot-password', AuthController.forgotPassword);
-router.post('/reset-password/:token', AuthController.resetPassword);
+router.post('/reset-password/:otp', AuthController.resetPassword);
 
 // Protected routes
 router.get('/profile', authenticate, AuthController.getUserProfile);

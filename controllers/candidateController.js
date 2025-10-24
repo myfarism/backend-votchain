@@ -12,6 +12,8 @@ class CandidateController {
       const { candidateId, name, description, imageUrl, prodi } = req.body;
       const adminEmail = req.user.email;
 
+      console.log('body: ', req.body)
+
       if (!candidateId || !name || !prodi) {
         return ResponseFormatter.validationError(res, {
           candidateId: candidateId ? null : 'Candidate ID is required',

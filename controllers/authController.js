@@ -7,6 +7,8 @@ const prisma = require('../lib/prisma');
 const web3Config = require('../config/web3');
 const ResponseFormatter = require('../utils/responseFormatter');
 const EmailService = require('../utils/email');
+const { getPrivateKeyByAddress, getAllAccounts } = require('../config/hardhatAccounts');
+const EncryptionHelper = require('../utils/encryptionHelper');
 
 const generateOTP = () => crypto.randomInt(100000, 999999).toString();
 
@@ -16,6 +18,7 @@ class AuthController {
     try {
       const provider = web3Config.getProvider();
       const accounts = await provider.listAccounts();
+      const contract = web3Config.getContract();
 
       const registeredUsers = await prisma.user.findMany({
         select: { walletAddress: true }
@@ -25,30 +28,53 @@ class AuthController {
         registeredUsers.map(u => u.walletAddress.toLowerCase())
       );
 
-      const availableAccounts = accounts
-        .map((addr, index) => {
-          const addressString = typeof addr === 'string' ? addr : addr.address;
-          return {
-            address: addressString,
-            index,
-            label: `Account #${index}`,
-            isAvailable: !registeredAddresses.has(addressString.toLowerCase())
-          };
-        })
-        .filter(acc => acc.isAvailable);
+      const availableAccounts = [];
+      const registeredOnBlockchain = [];
+
+      // Check each account di database dan blockchain
+      for (let i = 0; i < accounts.length; i++) {
+        const addr = accounts[i];
+        const addressString = typeof addr === 'string' ? addr : addr.address;
+        
+        // Check di blockchain
+        try {
+          const voterInfo = await contract.getVoterInfo(addressString);
+          
+          if (voterInfo.isRegistered) {
+            registeredOnBlockchain.push({
+              address: addressString,
+              index: i,
+              email: voterInfo.email,
+              nim: voterInfo.nim
+            });
+          } else if (!registeredAddresses.has(addressString.toLowerCase())) {
+            availableAccounts.push({
+              address: addressString,
+              index: i,
+              label: `Account #${i}`
+            });
+          }
+        } catch (error) {
+          // If error, assume not registered on blockchain
+          if (!registeredAddresses.has(addressString.toLowerCase())) {
+            availableAccounts.push({
+              address: addressString,
+              index: i,
+              label: `Account #${i}`
+            });
+          }
+        }
+      }
 
       console.log('📋 Available accounts:', availableAccounts.length);
+      console.log('⛓️  Registered on blockchain:', registeredOnBlockchain.length);
 
       return ResponseFormatter.success(
         res,
         {
-          availableAccounts: availableAccounts.map(acc => ({
-            address: acc.address,
-            index: acc.index,
-            label: acc.label
-          })),
+          availableAccounts,
+          registeredOnBlockchain,
           totalAccounts: accounts.length,
-          registeredAccounts: registeredAddresses.size,
           availableCount: availableAccounts.length
         },
         'Available accounts retrieved successfully'
@@ -82,7 +108,9 @@ class AuthController {
       if (!assignedWallet) {
         const provider = web3Config.getProvider();
         const accounts = await provider.listAccounts();
+        const contract = web3Config.getContract();
         
+        // Get registered users from database
         const registeredUsers = await prisma.user.findMany({
           select: { walletAddress: true }
         });
@@ -91,33 +119,94 @@ class AuthController {
           registeredUsers.map(u => u.walletAddress.toLowerCase())
         );
 
-        const availableAccount = accounts.find(addr => {
+        // Find available account (check database AND blockchain)
+        let foundAvailable = false;
+        
+        for (const addr of accounts) {
           const addressString = typeof addr === 'string' ? addr : addr.address;
-          return !registeredAddresses.has(addressString.toLowerCase());
-        });
+          
+          // Skip if already in database
+          if (registeredAddresses.has(addressString.toLowerCase())) {
+            continue;
+          }
+          
+          // ✅ CHECK DI BLOCKCHAIN
+          try {
+            const voterInfo = await contract.getVoterInfo(addressString);
+            
+            if (voterInfo.isRegistered) {
+              console.log(`⚠️  ${addressString} already registered on blockchain`);
+              continue; // Skip, sudah terdaftar di blockchain
+            }
+          } catch (error) {
+            console.error(`Error checking ${addressString}:`, error.message);
+          }
+          
+          // Available!
+          assignedWallet = addressString;
+          foundAvailable = true;
+          break;
+        }
 
-        if (!availableAccount) {
+        if (!foundAvailable || !assignedWallet) {
           return ResponseFormatter.error(
             res,
-            'No available wallet addresses. All Hardhat accounts are registered.',
+            'No available wallet addresses. All accounts are registered in database or blockchain.',
             400
           );
         }
 
-        assignedWallet = typeof availableAccount === 'string' 
-          ? availableAccount 
-          : availableAccount.address;
-
         console.log('🔑 Auto-assigned wallet:', assignedWallet);
       }
 
+      // Validate wallet address format
       if (!ethers.isAddress(assignedWallet)) {
         return ResponseFormatter.validationError(res, {
           walletAddress: 'Invalid Ethereum address format'
         });
       }
 
-      // Get private key dari Hardhat accounts
+      // ✅ CHECK EMAIL & NIM di DATABASE
+      const existingUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { email },
+            { nim },
+            { walletAddress: assignedWallet }
+          ]
+        }
+      });
+
+      if (existingUser) {
+        if (existingUser.email === email) {
+          return ResponseFormatter.error(res, 'Email already registered', 400);
+        }
+        if (existingUser.nim === nim) {
+          return ResponseFormatter.error(res, 'NIM already registered', 400);
+        }
+        if (existingUser.walletAddress.toLowerCase() === assignedWallet.toLowerCase()) {
+          return ResponseFormatter.error(res, 'Wallet address already registered in database', 400);
+        }
+      }
+
+      // ✅ CHECK WALLET ADDRESS di BLOCKCHAIN
+      const contract = web3Config.getContract();
+      try {
+        const voterInfo = await contract.getVoterInfo(assignedWallet);
+        
+        if (voterInfo.isRegistered) {
+          return ResponseFormatter.error(
+            res,
+            'Wallet address already registered on blockchain',
+            400
+          );
+        }
+      } catch (error) {
+        console.error('Error checking blockchain:', error.message);
+        // Continue if error (blockchain might not be available)
+      }
+
+      // Get private key from Hardhat
       assignedPrivateKey = getPrivateKeyByAddress(assignedWallet);
 
       if (!assignedPrivateKey) {
@@ -130,24 +219,8 @@ class AuthController {
 
       // Encrypt private key
       const encryptedPrivateKey = EncryptionHelper.encrypt(assignedPrivateKey);
-
-      const existingUser = await prisma.user.findFirst({
-        where: {
-          OR: [
-            { email },
-            { nim },
-            { walletAddress: assignedWallet }
-          ]
-        }
-      });
-
-      if (existingUser) {
-        return ResponseFormatter.error(
-          res,
-          'User already exists with this email, NIM, or wallet address',
-          400
-        );
-      }
+      
+      console.log('🔐 Private key encrypted successfully');
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const otp = generateOTP();
@@ -155,8 +228,8 @@ class AuthController {
 
       console.log('📝 Creating new user registration...');
       console.log('Email:', email);
+      console.log('NIM:', nim);
       console.log('Wallet:', assignedWallet);
-      console.log('🔐 Private key encrypted and stored');
 
       const result = await prisma.$transaction(async (tx) => {
         const newUser = await tx.user.create({
@@ -167,7 +240,7 @@ class AuthController {
             prodi,
             password: hashedPassword,
             walletAddress: assignedWallet,
-            encryptedPrivateKey, // ✅ SAVE ENCRYPTED PRIVATE KEY
+            encryptedPrivateKey,
             isVerified: false
           }
         });
@@ -183,7 +256,7 @@ class AuthController {
         return newUser;
       });
 
-      await sendOTPEmail(email, otp);
+      await EmailService.sendOTP(email, otp);
 
       console.log('✅ User registered successfully');
 
@@ -193,8 +266,9 @@ class AuthController {
           userId: result.id,
           email: result.email,
           username: result.username,
+          nim: result.nim,
+          prodi: result.prodi,
           walletAddress: result.walletAddress,
-          // ✅ RETURN ENCRYPTED PRIVATE KEY ke client
           encryptedPrivateKey: result.encryptedPrivateKey
         },
         'Registration successful. Please verify your email with OTP.',
@@ -246,11 +320,54 @@ class AuthController {
         return ResponseFormatter.error(res, 'Email is already verified', 400);
       }
 
+      // ✅ CHECK LAGI di BLOCKCHAIN sebelum register
+      console.log('⛓️  Checking blockchain before registration...');
+      const contract = web3Config.getContract();
+      
+      try {
+        const voterInfo = await contract.getVoterInfo(user.walletAddress);
+        
+        if (voterInfo.isRegistered) {
+          // Already registered on blockchain, just update database
+          console.log('⚠️  Already registered on blockchain, updating database only');
+          
+          await prisma.$transaction(async (tx) => {
+            await tx.user.update({
+              where: { id: user.id },
+              data: {
+                isVerified: true,
+                registeredOnChain: true
+              }
+            });
+
+            await tx.oTP.delete({
+              where: { id: otpRecord.id }
+            });
+          });
+
+          return ResponseFormatter.success(
+            res,
+            {
+              email: user.email,
+              username: user.username,
+              walletAddress: user.walletAddress,
+              verifiedAt: new Date().toISOString(),
+              encryptedPrivateKey: user.encryptedPrivateKey,
+              note: 'Already registered on blockchain'
+            },
+            'Email verified successfully. You can now login.'
+          );
+        }
+      } catch (error) {
+        console.error('Error checking blockchain:', error.message);
+      }
+
+      // Register voter on blockchain
       console.log('⛓️  Registering voter on blockchain...');
       const adminWallet = web3Config.getAdminWallet();
-      const contract = web3Config.getContractWithSigner(adminWallet);
+      const contractWithSigner = web3Config.getContractWithSigner(adminWallet);
 
-      const tx = await contract.registerVoter(
+      const tx = await contractWithSigner.registerVoter(
         user.walletAddress,
         user.email,
         user.username,
@@ -298,7 +415,6 @@ class AuthController {
           transactionHash: receipt.hash,
           blockNumber: receipt.blockNumber,
           verifiedAt: new Date().toISOString(),
-          // ✅ RETURN ENCRYPTED PRIVATE KEY
           encryptedPrivateKey: user.encryptedPrivateKey
         },
         'Email verified successfully. You can now login.'
@@ -357,7 +473,7 @@ class AuthController {
         });
       });
 
-      await sendOTPEmail(email, otp);
+      await EmailService.sendOTP(email, otp);
 
       console.log('✅ OTP resent successfully');
 
@@ -612,40 +728,25 @@ class AuthController {
 
       console.log('🔑 Password reset requested for:', email);
 
-      const resetToken = crypto.randomBytes(32).toString('hex');
+      const otp = generateOTP();
       const resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000);
 
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          resetPasswordToken: resetToken,
+          resetPasswordToken: otp,
           resetPasswordExpiry: resetTokenExpiry
         }
       });
 
-      const resetURL = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
-
-      const mailOptions = {
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: 'Password Reset Request',
-        html: `
-          <h2>Password Reset</h2>
-          <p>You requested a password reset. Click the link below to reset your password:</p>
-          <a href="${resetURL}">${resetURL}</a>
-          <p>This link will expire in 1 hour.</p>
-          <p>If you didn't request this, please ignore this email.</p>
-        `
-      };
-
-      await transporter.sendMail(mailOptions);
+      await EmailService.sendPasswordResetOTP(email, otp)
 
       console.log('✅ Password reset email sent');
 
       return ResponseFormatter.success(
         res,
         { email },
-        'Password reset link has been sent to your email'
+        'Password reset otp has been sent to your email'
       );
 
     } catch (error) {
@@ -657,12 +758,18 @@ class AuthController {
   // Reset Password
   static async resetPassword(req, res, next) {
     try {
-      const { token } = req.params;
-      const { newPassword } = req.body;
+      const { otp } = req.params;
+      const { newPassword, newConfirmPassword } = req.body;
 
       if (!newPassword) {
         return ResponseFormatter.validationError(res, {
           newPassword: 'New password is required'
+        });
+      }
+
+      if(newPassword !== newConfirmPassword) {
+        return ResponseFormatter.validationError(res, {
+          newPassword: 'Password Baru tidak sama'
         });
       }
 
@@ -676,7 +783,7 @@ class AuthController {
 
       const user = await prisma.user.findFirst({
         where: {
-          resetPasswordToken: token,
+          resetPasswordToken: otp,
           resetPasswordExpiry: { gt: new Date() }
         }
       });

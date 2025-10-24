@@ -15,7 +15,7 @@ model User {
   prodi                String
   password             String
   walletAddress        String    @unique @map("wallet_address")
-  encryptedPrivateKey  String    @map("encrypted_private_key") @db.Text
+  encryptedPrivateKey  String?    @map("encrypted_private_key") @db.Text
   isVerified           Boolean   @default(false) @map("is_verified")
   registeredOnChain    Boolean   @default(false) @map("registered_on_chain")
   registrationHash     String?   @map("registration_hash")
